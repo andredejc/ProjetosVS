@@ -1,0 +1,142 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Diagnostics;
+using System.IO;
+using System.Data.OleDb;
+using System.Data;
+using System.Data.Sql;
+using System.Data.SqlClient;
+using System.Collections;
+using System.Text.RegularExpressions;
+using Excel = Microsoft.Office.Interop.Excel;
+
+namespace Testes_de_Script
+{
+    class Program
+    {        
+        static void Main(string[] args)
+        {
+            string conexao = @"Integrated Security=SSPI;Persist Security Info=False;Initial Catalog=dbBR_BARE;Data Source=D5668M001E035;Connect Timeout=0";
+            string dirArquivosQuebrados = @"\\D5668m001e035\operacoes\BARE\AUTO\ArquivosQuebrados";
+            string arquivo = @"\\D5668m001e035\operacoes\BARE\AUTO\Teste\TesteAuto.txt";
+
+            StringBuilder builderArquivoNovo = new StringBuilder();
+            StringBuilder builderLinhasQuebradas = new StringBuilder();
+            string linhasQuebradas;
+            string[] linha;
+            int totalLinhasQuebradas = 0;
+
+            // Valida o total de linhas quebradas:
+            using (StreamReader streamReader = new StreamReader(arquivo, System.Text.Encoding.GetEncoding(1252)))
+            {
+                while (!streamReader.EndOfStream)
+                {
+                    linha = streamReader.ReadLine().Split('\n');
+
+                    foreach (string l in linha)
+                    {
+                        int count = Regex.Matches(l, ";").Count;                     
+                        if (count != 22)
+                        {
+                            totalLinhasQuebradas += 1;
+                            builderLinhasQuebradas.Append(l);
+                            builderLinhasQuebradas.Append("\n");
+                        }
+                    }                    
+
+                    if (totalLinhasQuebradas < 11)
+                    {
+                        foreach (string l in linha)
+                        {
+                            int count = Regex.Matches(l, ";").Count;
+                            if (count == 22)
+                            {
+                                builderArquivoNovo.Append(l.ToString());
+                                builderArquivoNovo.Append("\n");
+                            }
+                        }
+                    }
+                    else if (totalLinhasQuebradas > 10)
+                    {
+                        linhasQuebradas = builderLinhasQuebradas.ToString();
+                        throw new System.ArgumentException("O arquivo tem mais de 10 linhas quebradas. Verifique o delimitador!" + Environment.NewLine + linhasQuebradas);
+                    }
+                }                
+            }
+
+            if (totalLinhasQuebradas > 0 && totalLinhasQuebradas < 11)
+            {
+                File.Copy(arquivo, Path.Combine(dirArquivosQuebrados, Path.GetFileName(arquivo)), true);
+
+                string arquivoRetorno = builderArquivoNovo.ToString();
+
+                linhasQuebradas = builderLinhasQuebradas.ToString();
+
+                File.WriteAllText(arquivo, arquivoRetorno, Encoding.GetEncoding(1252));
+            }          
+
+            using (SqlBulkCopy bulkcopy = new SqlBulkCopy(conexao, System.Data.SqlClient.SqlBulkCopyOptions.TableLock)
+            {
+                DestinationTableName = "tbBR_tmp_CargaAuto",
+                BulkCopyTimeout = 0,
+                BatchSize = 5000
+            })
+            {
+                using (System.IO.StreamReader reader = new System.IO.StreamReader(arquivo, System.Text.Encoding.GetEncoding(1252)))
+                {
+                    reader.ReadLine();
+
+                    using (DataTable datatable = new DataTable())
+                    {
+                        var columns = datatable.Columns;
+                        columns.Add("Data Emissão Movimento", typeof(string));
+                        columns.Add("Item Código", typeof(string));
+                        columns.Add("Item Data Emissão", typeof(string));
+                        columns.Add("Item Data Início Vigência", typeof(string));
+                        columns.Add("Item Data Final Vigência Original", typeof(string));
+                        columns.Add("Item Data Fim Vigência", typeof(string));
+                        columns.Add("Sucursal Emissora", typeof(string));
+                        columns.Add("Segurado", typeof(string));
+                        columns.Add("Segurado CPF_CNPJ", typeof(string));
+                        columns.Add("Corretor CNPJ", typeof(string));
+                        columns.Add("Corretor CPF", typeof(string));
+                        columns.Add("Corretor Nome", typeof(string));
+                        columns.Add("Agência Produtora Cód.", typeof(string));
+                        columns.Add("Agência Produtora", typeof(string));
+                        columns.Add("Corretor Histórico", typeof(string));
+                        columns.Add("Corretor Histórico Cód. Corretor", typeof(string));
+                        columns.Add("Primeira Proteção Veicular?", typeof(string));
+                        columns.Add("Apólice - Nº Contrato", typeof(string));
+                        columns.Add("Tipo Endosso Cód.", typeof(string));
+                        columns.Add("Tipo Endosso", typeof(string));
+                        columns.Add("Qtd Item Emitido (Inclusão)", typeof(string));
+                        columns.Add("Vl. PEL", typeof(string));
+                        columns.Add("Vl. Comis Corretagem", typeof(string));
+                        int batchsize = 0;
+
+                        while (!reader.EndOfStream)
+                        {
+                            string[] line = reader.ReadLine().Split(';');
+                            datatable.Rows.Add(line);
+                            batchsize += 1;
+                            if (batchsize == 5000)
+                            {
+                                bulkcopy.WriteToServer(datatable);
+                                datatable.Rows.Clear();
+                                batchsize = 0;
+                            }
+                        }                            
+                        bulkcopy.WriteToServer(datatable);
+                        datatable.Rows.Clear();
+                    }
+                }
+            }        
+
+            Console.WriteLine("Processo finalizado.....");
+            Console.ReadKey();
+                        
+        }
+    }
+}
